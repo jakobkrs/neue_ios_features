@@ -20,7 +20,7 @@ public class WatchSyncBridge: NSObject, FlutterPlugin {
     private static let channelName = "kepler_app/watch_sync"
     // Kopien von appGroupId/dataKey/nextDataKey/planNamesKey: Massgeblich sind die Definitionen in
     // KeplerLockWidget.swift (die Datei gehoert nicht zum Runner-Target) bzw. iosWidgetAppGroupId
-    // in lib/tabs/hourtable/widget_data.dart - bei Aenderungen alle Stellen anpassen.
+    // in lib/libs/plan_widgets.dart - bei Aenderungen alle Stellen anpassen.
     private static let appGroupId = "group.de.kepler-chemnitz.keplerapp"
     private static let dataKey = "data"
     private static let nextDataKey = "data_next"

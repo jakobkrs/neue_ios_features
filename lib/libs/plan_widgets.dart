@@ -42,15 +42,16 @@ import 'package:kepler_app/libs/indiware.dart';
 import 'package:kepler_app/libs/logging.dart';
 import 'package:kepler_app/libs/preferences.dart';
 import 'package:kepler_app/libs/state.dart';
+import 'package:kepler_app/libs/watch_sync.dart';
 import 'package:kepler_app/tabs/hourtable/ht_data.dart';
-import 'package:kepler_app/tabs/hourtable/watch_sync.dart';
 import 'package:provider/provider.dart';
 import 'package:xml/xml.dart';
 
-// Plandaten für die iOS-Widgets (Sperrbildschirm + Homescreen) und - über
-// ios/Runner/WatchSyncBridge.swift - für die Apple Watch. Wird nur auf iOS verwendet; die Daten
-// für das Android-Homescreen-Widget schreibt weiterhin YourPlanPageState._loadWidgetData in
-// your_plan.dart.
+// Plandaten für die Stundenplan-Widgets: das Android-Homescreen-Widget (YourPlanWidget.kt), die
+// iOS-Widgets (Sperrbildschirm + Homescreen) und - über ios/Runner/WatchSyncBridge.swift - die
+// Apple Watch. Datenformat, Laden und Aktualisieren sind auf beiden Plattformen gleich.
+// Plattformabhängig sind nur das Neuladen der Widgets ([_reloadWidgets]), die gespeicherte
+// Planauswahl ([_savePlanSelection]) und der nächste Schultag, den nur iOS teilt.
 
 /// App-Group-ID für den geteilten Speicher zwischen App und iOS-Widget-Extension (Sperrbildschirm-
 /// und Homescreen-Widgets). Muss mit der App-Group in den Entitlements übereinstimmen
@@ -66,9 +67,9 @@ const _iosWidgetKinds = [
   "KeplerDayWidget",
 ];
 
-/// wandelt eine Stunde in die Map-Form um, die die iOS-Widgets lesen. Entspricht der Form des
-/// Android-Widgets, zusätzlich mit `start`/`end` (Format "HH:mm"), aus denen die iOS-Widgets selbst
-/// die aktuelle bzw. nächste Stunde berechnen.
+/// wandelt eine Stunde in die Map-Form um, die die Widgets lesen. `start`/`end` (Format "HH:mm")
+/// brauchen nur die iOS-Widgets, die daraus selbst die aktuelle bzw. nächste Stunde berechnen - das
+/// Android-Widget ignoriert sie.
 Map<String, dynamic> lessonToWidgetMap(VPLesson l) => {
       "schoolHour": l.schoolHour,
       "subject": l.subjectCode,
@@ -85,7 +86,7 @@ Map<String, dynamic> lessonToWidgetMap(VPLesson l) => {
     };
 
 /// merkt sich während einer Aktualisierung, ob die Online-Abfragen den Server erreicht haben - nur
-/// dann gilt die Drosselung in [updateIOSWidgetData] als erfüllt
+/// dann gilt die Drosselung in [updatePlanWidgets] als erfüllt
 class _FetchState {
   bool attemptedOnline = false;
   bool failedOnline = false;
@@ -231,7 +232,8 @@ Future<List<List<dynamic>>?> _buildPlansForDate(DateTime date, StuPlanData stdat
   return plans;
 }
 
-/// Samstag oder Sonntag (wie keplerIsWeekend in den iOS-Widgets)
+/// Samstag oder Sonntag (wie keplerIsWeekend in den iOS-Widgets bzw. die Wochenend-Prüfung in
+/// YourPlanWidget.kt)
 bool _isWeekend(DateTime d) => d.weekday == DateTime.saturday || d.weekday == DateTime.sunday;
 
 /// nächster Schultag (Mo–Fr) nach [from]
@@ -249,7 +251,7 @@ bool _hasPlanSelection(StuPlanData stdata, bool teacher) => teacher
     ? stdata.selectedTeacherName != null
     : stdata.selectedClassName != null || stdata.altSelectedClassNames.isNotEmpty;
 
-/// baut den Plan für [date] und speichert ihn unter [key] in der App-Group. Liefert Indiware keinen
+/// baut den Plan für [date] und speichert ihn unter [key] im Widget-Speicher. Liefert Indiware keinen
 /// Plan, ist der Tag laut [StuPlanData.checkIfHoliday] aber frei (Feiertag/Ferien), wird ein leerer
 /// Plan mit `holiday: true` gespeichert - so zeigen die Widgets "frei" statt "Plan veraltet" bzw.
 /// "noch kein Plan". Sonst bleibt der bisherige Wert stehen.
@@ -276,19 +278,26 @@ Future<bool> _saveDay(String key, DateTime date, StuPlanData stdata, CredentialS
   }
 }
 
-/// Wert, der in der App-Group für „kein Plan“ steht.
+/// Wert, der im Widget-Speicher für „kein Plan“ steht.
 ///
-/// Ein echtes Entfernen ist über home_widget 0.8.0 nicht möglich: `saveWidgetData(key, null)` kommt
-/// auf iOS als NSNull statt nil an, das Plugin versucht es zu speichern und die App stürzt ab
-/// („Attempt to insert non-property list object null“). Ein leerer Text wirkt für alle Leser wie ein
-/// fehlender Eintrag, weil sie ihn als JSON parsen (PlanStore, availablePlanNames, Uhr).
-const _noPlanValue = "";
+/// Auf iOS ist ein echtes Entfernen über home_widget 0.8.0 nicht möglich: `saveWidgetData(key, null)`
+/// kommt dort als NSNull statt nil an, das Plugin versucht es zu speichern und die App stürzt ab
+/// („Attempt to insert non-property list object null“). Ein leerer Text wirkt für alle iOS-Leser wie
+/// ein fehlender Eintrag, weil sie ihn als JSON parsen (PlanStore, availablePlanNames, Uhr).
+/// Auf Android entfernt `null` den Eintrag - einen leeren Text könnte YourPlanWidget.kt nicht als
+/// JSON lesen.
+final _noPlanValue = Platform.isIOS ? "" : null;
 
-/// Key für die Namen aller ausgewählten Pläne als JSON-Liste, in derselben Reihenfolge wie `plans`
-/// (primärer zuerst). Daraus füllt der Widget-Editor seine Planauswahl (availablePlanNames in
+bool _isNoPlan(String? value) => value == null || value.isEmpty;
+
+/// iOS: Key für die Namen aller ausgewählten Pläne als JSON-Liste, in derselben Reihenfolge wie
+/// `plans` (primärer zuerst). Daraus füllt der Widget-Editor seine Planauswahl (availablePlanNames in
 /// PlanSelection.swift). Bewusst getrennt von "data"/"data_next": An Wochenenden, Ferientagen oder
 /// bevor ein Plan veröffentlicht ist, enthalten die keine Pläne - die Auswahl wäre dann leer.
 const _planNamesKey = "plan_names";
+
+/// Android: Name des AppWidgetReceivers (android/.../widgets/YourPlanWidgetReceiver.kt)
+const _androidWidgetReceiver = "widgets.YourPlanWidgetReceiver";
 
 /// Namen der ausgewählten Pläne in der Reihenfolge von `plans` (siehe [_buildPlansForDate])
 List<String> _planNames(StuPlanData stdata, bool teacher) => [
@@ -296,12 +305,42 @@ List<String> _planNames(StuPlanData stdata, bool teacher) => [
       ...stdata.altSelectedClassNames,
     ].whereType<String>().toList();
 
-/// lädt alle iOS-Widgets (Sperrbildschirm + Homescreen) neu und stößt die Übertragung an die Uhr an.
+/// speichert, welche Pläne ausgewählt sind - daraus bieten die Widgets beim Einrichten ihre
+/// Planauswahl an. Die Reihenfolge entspricht `plans` (siehe [_buildPlansForDate]).
 ///
-/// Gibt `true` zurück, wenn alle Neulade-Aufrufe angenommen wurden. home_widget 0.8.0 ruft dafür
-/// nur `WidgetCenter.reloadTimelines(ofKind:)` auf und meldet danach immer `true` - auch für nicht
-/// platzierte Widgets; ein Fehler kommt dort als Exception.
-Future<bool> _reloadIOSWidgets() async {
+/// Android: "plan_setup", "plans_avail" (durch "|" getrennt) und "teacher" für
+/// YourPlanWidgetConfigActivity.kt. iOS: die Namen als JSON unter [_planNamesKey].
+Future<void> _savePlanSelection(StuPlanData stdata, bool teacher) async {
+  if (Platform.isAndroid) {
+    final primary = teacher ? stdata.selectedTeacherName : stdata.selectedClassName;
+    await HomeWidget.saveWidgetData("plan_setup", primary != null);
+    if (primary == null) return;
+    await HomeWidget.saveWidgetData("plans_avail", [primary, ...stdata.altSelectedClassNames].join("|"));
+    await HomeWidget.saveWidgetData("teacher", teacher);
+  } else {
+    await HomeWidget.saveWidgetData<String>(_planNamesKey, jsonEncode(_planNames(stdata, teacher)));
+  }
+}
+
+/// Gegenstück zu [_savePlanSelection]: kein Plan ausgewählt bzw. teilbar
+Future<void> _removePlanSelection() async {
+  if (Platform.isAndroid) {
+    await HomeWidget.saveWidgetData("plan_setup", false);
+  } else {
+    await HomeWidget.saveWidgetData<String>(_planNamesKey, _noPlanValue);
+  }
+}
+
+/// lädt alle Widgets neu. Auf iOS (Sperrbildschirm + Homescreen) wird zusätzlich die Übertragung an
+/// die Uhr angestoßen.
+///
+/// Gibt `true` zurück, wenn alle Neulade-Aufrufe angenommen wurden. home_widget 0.8.0 ruft auf iOS
+/// dafür nur `WidgetCenter.reloadTimelines(ofKind:)` auf und meldet danach immer `true` - auch für
+/// nicht platzierte Widgets; ein Fehler kommt dort als Exception.
+Future<bool> _reloadWidgets() async {
+  if (Platform.isAndroid) {
+    return (await HomeWidget.updateWidget(androidName: _androidWidgetReceiver)) ?? false;
+  }
   var ok = true;
   for (final kind in _iosWidgetKinds) {
     ok = ((await HomeWidget.updateWidget(iOSName: kind)) ?? false) && ok;
@@ -313,22 +352,22 @@ Future<bool> _reloadIOSWidgets() async {
   return ok;
 }
 
-/// leert "data" und "data_next" in der App-Group (siehe [_noPlanValue]) und lädt Widgets und Uhr neu.
-/// Ist beides schon leer, passiert nichts - so löst nicht jeder Aufruf ohne Zugangsdaten eine
-/// Übertragung an die Uhr aus.
+/// leert "data", "data_next" und die Planauswahl im Widget-Speicher (siehe [_noPlanValue]) und lädt
+/// die Widgets (und die Uhr) neu. Ist beides schon leer, passiert nichts - so löst nicht jeder Aufruf
+/// ohne Zugangsdaten eine Übertragung an die Uhr aus.
 Future<void> _removeWidgetData() async {
   final data = await HomeWidget.getWidgetData<String>("data");
   final next = await HomeWidget.getWidgetData<String>("data_next");
-  if ((data ?? _noPlanValue) == _noPlanValue && (next ?? _noPlanValue) == _noPlanValue) return;
+  if (_isNoPlan(data) && _isNoPlan(next)) return;
   await HomeWidget.saveWidgetData<String>("data", _noPlanValue);
   await HomeWidget.saveWidgetData<String>("data_next", _noPlanValue);
-  await HomeWidget.saveWidgetData<String>(_planNamesKey, _noPlanValue);
-  await _reloadIOSWidgets();
+  await _removePlanSelection();
+  await _reloadWidgets();
 }
 
-/// eigentliche Umsetzung von [saveStuPlanWidgetData]; liefert zusätzlich, ob die Online-Abfragen
-/// erfolgreich waren (für die Drosselung in [updateIOSWidgetData])
-Future<({bool ok, bool onlineSucceeded})> _saveStuPlanWidgetData(
+/// eigentliche Umsetzung von [savePlanWidgetData]; liefert zusätzlich, ob die Online-Abfragen
+/// erfolgreich waren (für die Drosselung in [updatePlanWidgets])
+Future<({bool ok, bool onlineSucceeded})> _savePlanWidgetData(
   StuPlanData stdata,
   CredentialStore creds,
   Preferences prefs,
@@ -354,7 +393,7 @@ Future<({bool ok, bool onlineSucceeded})> _saveStuPlanWidgetData(
       return (ok: false, onlineSucceeded: false);
     }
 
-    await HomeWidget.saveWidgetData<String>(_planNamesKey, jsonEncode(_planNames(stdata, teacher)));
+    await _savePlanSelection(stdata, teacher);
 
     final today = DateTime.now();
     final todayKey = IndiwareDataManager.fnTimeFormat.format(today);
@@ -365,17 +404,20 @@ Future<({bool ok, bool onlineSucceeded})> _saveStuPlanWidgetData(
     // heutiger Plan. Am Wochenende gibt es keinen - der Server liefert dann keinen Plan (404), und die
     // Abfrage kostet Zeit, die im Hintergrund-Task knapp ist. Deshalb am Wochenende nicht abfragen;
     // ein stehengebliebener Freitagsplan schadet nicht, weil die Widgets das Datum prüfen und ab
-    // Montag "data_next" nehmen, bis "data" wieder geschrieben wird.
+    // Montag "data_next" nehmen (iOS) bzw. "Wochenende" zeigen (Android), bis "data" wieder
+    // geschrieben wird.
     // Beide Tage sind getrennt abgesichert, damit ein Fehler bei einem Tag den anderen nicht
     // verhindert.
     final savedToday = !_isWeekend(today) &&
         await _saveDay("data", today, stdata, creds, prefs, teacher, forceRefresh, state);
-    // zusätzlich den nächsten Schultag teilen, damit die Widgets abends bzw. am Wochenende schon
-    // dessen Plan zeigen können
-    final savedNext = await _saveDay(
-        "data_next", _nextSchoolDay(today), stdata, creds, prefs, teacher, forceRefresh, state);
+    // iOS: zusätzlich den nächsten Schultag teilen, damit die Widgets und die Uhr abends bzw. am
+    // Wochenende schon dessen Plan zeigen können. Das Android-Widget zeigt nur den heutigen Plan -
+    // dort wäre das nur eine weitere Abfrage.
+    final savedNext = Platform.isIOS &&
+        await _saveDay(
+            "data_next", _nextSchoolDay(today), stdata, creds, prefs, teacher, forceRefresh, state);
 
-    final reloaded = await _reloadIOSWidgets();
+    final reloaded = await _reloadWidgets();
     return (ok: (savedToday || savedNext) && reloaded, onlineSucceeded: state.onlineSucceeded);
   } catch (e, s) {
     logCatch("widget-data", "Fehler beim Speichern der Widget-Daten: $e", s);
@@ -383,13 +425,14 @@ Future<({bool ok, bool onlineSucceeded})> _saveStuPlanWidgetData(
   }
 }
 
-/// Ermittelt den (Vertretungs-)Plan für heute ("data") und den nächsten Schultag ("data_next") für
-/// den ausgewählten Lehrer bzw. die ausgewählten Klassen und speichert ihn über `home_widget` in der
-/// App-Group. Danach werden alle iOS-Widgets neu geladen und die Übertragung an die Uhr angestoßen.
+/// Ermittelt den (Vertretungs-)Plan für heute ("data") und - nur iOS - den nächsten Schultag
+/// ("data_next") für den ausgewählten Lehrer bzw. die ausgewählten Klassen und speichert ihn über
+/// `home_widget` im Widget-Speicher (iOS: App-Group). Danach werden alle Widgets neu geladen, auf iOS
+/// wird außerdem die Übertragung an die Uhr angestoßen.
 ///
 /// `plans` enthält alle ausgewählten Pläne (primärer zuerst); welchen davon ein Widget zeigt, wählt
-/// der Nutzer in der Widget-Konfiguration (Standard: `plans[0]`). Die aktuelle/nächste Stunde
-/// berechnen die Widgets selbst anhand der `start`/`end`-Zeiten.
+/// der Nutzer in der Widget-Konfiguration (iOS-Standard: `plans[0]`). Die aktuelle/nächste Stunde
+/// berechnen die iOS-Widgets selbst anhand der `start`/`end`-Zeiten.
 ///
 /// Der Plan-Cache der App wird dabei nur gelesen, nie geschrieben (Grund siehe [_loadDay]).
 ///
@@ -397,50 +440,51 @@ Future<({bool ok, bool onlineSucceeded})> _saveStuPlanWidgetData(
 /// bzw. den Cache, falls die Abfrage fehlschlägt). Ohne wird nur online abgefragt, wenn lokal noch
 /// nichts für den Tag vorliegt.
 ///
-/// Fehlen die Zugangsdaten oder ist kein Plan ausgewählt, werden "data" und "data_next" geleert
-/// (z.B. nach dem Abmelden) und nichts abgefragt. Am Wochenende wird "data" nicht abgefragt.
+/// Fehlen die Zugangsdaten oder ist kein Plan ausgewählt, werden "data", "data_next" und die
+/// Planauswahl geleert (z.B. nach dem Abmelden) und nichts abgefragt. Am Wochenende wird "data"
+/// nicht abgefragt.
 ///
-/// Gibt `true` zurück, wenn mindestens einer der beiden Tage gespeichert und die Widgets neu geladen
-/// wurden. Schlägt nie mit einer Exception fehl, sondern gibt im Fehlerfall `false` zurück. Nur
-/// iOS - auf anderen Plattformen passiert nichts.
-Future<bool> saveStuPlanWidgetData(
+/// Gibt `true` zurück, wenn mindestens ein Tag gespeichert und die Widgets neu geladen wurden.
+/// Schlägt nie mit einer Exception fehl, sondern gibt im Fehlerfall `false` zurück.
+Future<bool> savePlanWidgetData(
   StuPlanData stdata,
   CredentialStore creds,
   Preferences prefs,
   bool teacher, {
   bool forceRefresh = false,
-}) async {
-  if (!Platform.isIOS) return false;
-  return (await _saveStuPlanWidgetData(stdata, creds, prefs, teacher, forceRefresh)).ok;
-}
+}) async =>
+    (await _savePlanWidgetData(stdata, creds, prefs, teacher, forceRefresh)).ok;
 
-/// Soll die laufende App für die iOS-Widgets den Lehrerplan (statt der Klassenpläne) teilen?
+/// Sollen die Widgets den Lehrerplan (statt der Klassenpläne) zeigen?
 ///
 /// Maßgeblich ist der Nutzertyp. Steht er nicht fest ([UserType.nobody], z.B. wenn LernSax beim
 /// Start nicht erreichbar war und noch kein Nutzertyp gespeichert ist, oder die LernSax-Zugangsdaten
 /// ungültig geworden sind, die Stundenplan-Zugangsdaten aber nicht), gilt dieselbe Regel wie im
-/// Hintergrund-Task (runWidgetUpdateTask in tasks.dart, der keinen Nutzertyp kennt): Lehrerplan,
+/// iOS-Hintergrund-Task (runWidgetUpdateTask in tasks.dart, der keinen Nutzertyp kennt): Lehrerplan,
 /// sobald ein Lehrer ausgewählt ist. Sonst teilte die App in diesem Fall die Klassenpläne und der
 /// Hintergrund-Task danach den Lehrerplan - die Widgets sprängen zwischen beiden hin und her.
-bool iosWidgetTeacherMode(UserType userType, StuPlanData stdata) => switch (userType) {
+/// Ein reines `userType == UserType.teacher` würde in diesem Fall außerdem einen Klassenplan
+/// suchen, obwohl nur ein Lehrer ausgewählt ist.
+bool widgetTeacherMode(UserType userType, StuPlanData stdata) => switch (userType) {
       UserType.teacher => true,
       UserType.nobody => stdata.selectedTeacherName != null,
       UserType.pupil || UserType.parent => false,
     };
 
 /// Mindestabstand zwischen zwei Online-Abfragen für die Widgets aus der laufenden App heraus
-const iosWidgetRefreshInterval = Duration(minutes: 15);
+const widgetRefreshInterval = Duration(minutes: 15);
 
 /// Zeitpunkt der letzten erfolgreichen Online-Abfrage aus der laufenden App
 DateTime? _lastOnlineRefresh;
 Future<bool>? _runningUpdate;
 
-/// Aktualisiert die iOS-Widget-Daten aus der laufenden App (Start, Zurückholen aus dem Hintergrund,
+/// Aktualisiert die Widget-Daten aus der laufenden App (Start, Zurückholen aus dem Hintergrund,
 /// Öffnen von "Dein Stundenplan", geänderte Planauswahl).
 ///
-/// Online wird höchstens alle [iosWidgetRefreshInterval] abgefragt, sonst lokal gelesen (siehe
-/// [saveStuPlanWidgetData]). Frische Daten beim Start und Zurückholen sind sinnvoll, weil iOS den
-/// Hintergrund-Task (tasks.dart) nur selten und unvorhersehbar startet. Die Drosselung verhindert,
+/// Online wird höchstens alle [widgetRefreshInterval] abgefragt, sonst lokal gelesen (siehe
+/// [savePlanWidgetData]). Frische Daten beim Start und Zurückholen sind sinnvoll, weil die Widgets
+/// sonst nur im Hintergrund aktualisiert werden - auf iOS selten und unvorhersehbar, auf Android
+/// gar nicht. Die Drosselung verhindert,
 /// dass jedes kurze Wechseln in die App Netzwerkanfragen auslöst. Als Zeitpunkt zählt nur eine
 /// erfolgreiche Online-Abfrage - schlägt sie fehl (z.B. offline), wird beim nächsten Aufruf erneut
 /// online abgefragt.
@@ -451,14 +495,13 @@ Future<bool>? _runningUpdate;
 /// [selectionChanged]: nach einer Änderung der Planauswahl (Klassen, Lehrer, ausgeblendete Fächer).
 /// Dann wird eine laufende Aktualisierung nicht übernommen - sie arbeitet evtl. noch mit der alten
 /// Auswahl -, sondern danach neu aktualisiert, und zwar ohne Drosselung online.
-Future<bool> updateIOSWidgetData(
+Future<bool> updatePlanWidgets(
   StuPlanData stdata,
   CredentialStore creds,
   Preferences prefs,
   bool teacher, {
   bool selectionChanged = false,
 }) {
-  if (!Platform.isIOS) return Future.value(false);
   final running = _runningUpdate;
   if (running != null && !selectionChanged) return running;
 
@@ -466,8 +509,8 @@ Future<bool> updateIOSWidgetData(
     final start = DateTime.now();
     final last = _lastOnlineRefresh;
     final forceRefresh =
-        selectionChanged || last == null || start.difference(last) >= iosWidgetRefreshInterval;
-    final result = await _saveStuPlanWidgetData(stdata, creds, prefs, teacher, forceRefresh);
+        selectionChanged || last == null || start.difference(last) >= widgetRefreshInterval;
+    final result = await _savePlanWidgetData(stdata, creds, prefs, teacher, forceRefresh);
     if (forceRefresh && result.onlineSucceeded) _lastOnlineRefresh = start;
     return result.ok;
   }
@@ -482,19 +525,18 @@ Future<bool> updateIOSWidgetData(
   return update;
 }
 
-/// [updateIOSWidgetData] nach einer Änderung der Planauswahl in der App (Lehrer auswählen, Fächer
-/// ausblenden, alternative Klasse hinzufügen/bearbeiten/entfernen). Liest alles Nötige aus [context]
-/// - nur synchron, also direkt im Callback aufrufen, solange [context] noch eingehängt ist. Ersetzt
-/// auf iOS den Aufruf von [StuPlanData.updateWidgets], der dort nichts bewirkt (bei der
-/// Lehrerauswahl gibt es keinen solchen Aufruf, dort wird es nur auf iOS aufgerufen).
-Future<bool> updateIOSWidgetDataAfterSelectionChange(BuildContext context) {
+/// [updatePlanWidgets] mit allem Nötigen aus [context] - nur synchron, also direkt im Callback
+/// aufrufen, solange [context] noch eingehängt ist. [selectionChanged] nach einer Änderung der
+/// Planauswahl (Lehrer auswählen, Fächer ausblenden, alternative Klasse hinzufügen/bearbeiten/
+/// entfernen), siehe [updatePlanWidgets].
+Future<bool> updatePlanWidgetsFrom(BuildContext context, {bool selectionChanged = false}) {
   final stdata = context.read<StuPlanData>();
-  return updateIOSWidgetData(
+  return updatePlanWidgets(
     stdata,
     context.read<CredentialStore>(),
     context.read<Preferences>(),
-    iosWidgetTeacherMode(context.read<AppState>().userType, stdata),
-    selectionChanged: true,
+    widgetTeacherMode(context.read<AppState>().userType, stdata),
+    selectionChanged: selectionChanged,
   );
 }
 
@@ -502,9 +544,8 @@ Future<bool> updateIOSWidgetDataAfterSelectionChange(BuildContext context) {
 /// keinen Plan mehr zeigen, und vergisst die zuletzt online abgefragten Pläne. Wartet vorher eine
 /// laufende Aktualisierung ab, damit diese die Daten nicht danach wieder schreibt.
 ///
-/// Schlägt nie mit einer Exception fehl. Nur iOS - auf anderen Plattformen passiert nichts.
-Future<void> clearIOSWidgetData() async {
-  if (!Platform.isIOS) return;
+/// Schlägt nie mit einer Exception fehl.
+Future<void> clearPlanWidgets() async {
   try {
     await _runningUpdate;
     _onlineKlData.clear();

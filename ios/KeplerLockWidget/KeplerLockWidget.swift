@@ -7,7 +7,7 @@
 // Sperrbildschirm-Widgets (iOS) bzw. Complications (watchOS), die Fach, Raum und Lehrer der
 // aktuellen bzw. nächsten Stunde aus dem ausgewählten (Vertretungs-)Plan anzeigen. Die Daten werden
 // von der Flutter-App über das home_widget-Plugin in die App-Group geschrieben (siehe
-// lib/tabs/hourtable/widget_data.dart); auf die Uhr kommen sie über WatchSyncBridge/WatchSync.
+// lib/libs/plan_widgets.dart); auf die Uhr kommen sie über WatchSyncBridge/WatchSync.
 //
 // Die Datei wird in die iOS-Widget-Extension, die watchOS-Widget-Extension und die Watch-App
 // kompiliert. Datenmodell, Laden (PlanStore), Block-Logik und Kalender-Helfer hier nutzen deshalb
@@ -19,7 +19,7 @@ import SwiftUI
 
 // MARK: - Konfiguration
 
-/// muss mit iosWidgetAppGroupId in widget_data.dart, den .entitlements und der Kopie in
+/// muss mit iosWidgetAppGroupId in plan_widgets.dart, den .entitlements und der Kopie in
 /// WatchSyncBridge.swift übereinstimmen
 let appGroupId = "group.de.kepler-chemnitz.keplerapp"
 /// Key, unter dem die Flutter-App den Tagesplan als JSON speichert
@@ -168,7 +168,7 @@ private func parseTime(_ value: Any?, on day: Date) -> Date? {
     return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: day)
 }
 
-/// parst einen Plan-JSON-String (Format siehe widget_data.dart); gibt nil zurück, wenn keine
+/// parst einen Plan-JSON-String (Format siehe plan_widgets.dart); gibt nil zurück, wenn keine
 /// (gültigen) Daten vorhanden sind. Die Uhrzeiten der Stunden werden auf den Kalendertag von
 /// `referenceDate` gelegt.
 ///

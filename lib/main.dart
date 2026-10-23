@@ -53,6 +53,7 @@ import 'package:kepler_app/libs/indiware.dart';
 import 'package:kepler_app/libs/lernsax.dart';
 import 'package:kepler_app/libs/logging.dart';
 import 'package:kepler_app/libs/notifications.dart';
+import 'package:kepler_app/libs/plan_widgets.dart';
 import 'package:kepler_app/libs/preferences.dart';
 import 'package:kepler_app/libs/proxy.dart';
 import 'package:kepler_app/libs/snack.dart';
@@ -63,7 +64,6 @@ import 'package:kepler_app/loading_screen.dart';
 import 'package:kepler_app/navigation.dart';
 import 'package:kepler_app/tabs/about.dart';
 import 'package:kepler_app/tabs/hourtable/ht_data.dart';
-import 'package:kepler_app/tabs/hourtable/widget_data.dart';
 import 'package:kepler_app/tabs/lernsax/ls_data.dart';
 import 'package:kepler_app/tabs/lernsax/pages/files_page.dart';
 import 'package:kepler_app/tabs/school/news_data.dart';
@@ -145,9 +145,14 @@ Future<void> initializeApp() async {
 
   final launchedByNotification = (await getNotifLaunchInfo())?.didNotificationLaunchApp ?? false;
 
-  // Android: führt die Aufgabe im angegebenen Takt selbst aus (nicht, wenn die App über eine
-  // Benachrichtigung gestartet wurde)
-  if (Platform.isAndroid && !launchedByNotification) {
+  // Android führt die Aufgabe im angegebenen Takt selbst aus (nicht, wenn die App über eine
+  // Benachrichtigung gestartet wurde). Auf iOS wird damit über BGTaskScheduler eine
+  // Hintergrundausführung angefordert - ohne diesen Aufruf aktualisieren sich Widgets und Uhr nur
+  // beim Öffnen der App. workmanager_apple verwendet dabei nur `initialDelay` als früheste
+  // Startzeit der ersten Ausführung; jede weitere plant das Plugin danach selbst mit dem Abstand aus
+  // ios/Runner/AppDelegate.swift (4 Stunden). Wann tatsächlich ausgeführt wird, entscheidet iOS
+  // nach Nutzungsverhalten und Akkustand.
+  if (!launchedByNotification) {
     Workmanager().registerPeriodicTask(
       fetchTaskName,
       fetchTaskName,
@@ -155,21 +160,6 @@ Future<void> initializeApp() async {
       existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
       initialDelay: const Duration(seconds: 5),
       constraints: Constraints(networkType: NetworkType.connected),
-    );
-  }
-
-  // iOS: Ohne diesen Aufruf wird über BGTaskScheduler nie eine Hintergrundausführung
-  // angefordert - dann aktualisieren sich Widgets und Uhr nur beim Öffnen der App.
-  // `frequency` wird von workmanager_apple auf iOS ignoriert: Die erste Anfrage darf sofort
-  // laufen (kein initialDelay), jede weitere plant das Plugin nach einer Ausführung selbst mit
-  // dem Abstand aus ios/Runner/AppDelegate.swift (4 Stunden). Der Wert hier entspricht diesem
-  // Abstand nur zur Dokumentation. Auch dann ist das nur eine früheste Startzeit - wann
-  // tatsächlich ausgeführt wird, entscheidet iOS nach Nutzungsverhalten und Akkustand.
-  if (Platform.isIOS && !launchedByNotification) {
-    Workmanager().registerPeriodicTask(
-      fetchTaskName,
-      fetchTaskName,
-      frequency: const Duration(hours: 4),
     );
   }
   
@@ -189,10 +179,6 @@ Future<void> initializeApp() async {
   if (!_prefs.enableInfiniteStuPlanScrolling) await IndiwareDataManager.removeOldCacheFiles();
   final del = await KeplerLogging.deleteLogsOlderThan(DateTime.now().subtract(Duration(days: _prefs.logRetentionDays)));
   if (kDebugMode) print("deleted logs for the following days: $del");
-
-  /// auf iOS nicht hier: Der Nutzertyp steht erst nach calcUT() fest (siehe _KeplerAppState._load),
-  /// und die iOS-Widgets werden dort in einem Durchgang aktualisiert
-  if (!Platform.isIOS) await _stuPlanData.updateWidgets(_appState.userType == UserType.teacher);
 
   await DynamicData.init();
 }
@@ -460,14 +446,11 @@ class _KeplerAppState extends State<KeplerApp> with WidgetsBindingObserver {
     utype = await calcUT();
     _internalState.lastUserType = utype;
 
-    /// iOS: Widget-Daten beim Start aktualisieren, damit Widgets und Uhr auch ohne Öffnen des
+    /// Widget-Daten beim Start aktualisieren, damit Widgets (und Uhr) auch ohne Öffnen des
     /// Stundenplans aktuelle Daten haben. Erst hier, weil vorher der Nutzertyp nicht feststeht und
-    /// Lehrer sonst einen Schülerplan bekämen. Lehrer- oder Schülerplan wie im Hintergrund-Task
-    /// wählen, falls der Nutzertyp unbekannt ist (siehe iosWidgetTeacherMode). Best-effort (wirft
-    /// nie) und bewusst nicht awaited, um den Ladebildschirm nicht zu blockieren.
-    if (Platform.isIOS) {
-      updateIOSWidgetData(_stuPlanData, _credStore, _prefs, iosWidgetTeacherMode(utype, _stuPlanData));
-    }
+    /// Lehrer sonst einen Schülerplan bekämen (siehe widgetTeacherMode). Best-effort (wirft nie)
+    /// und bewusst nicht awaited, um den Ladebildschirm nicht zu blockieren.
+    updatePlanWidgets(_stuPlanData, _credStore, _prefs, widgetTeacherMode(utype, _stuPlanData));
 
     if (!_internalState.introShown) {
       // _appState.selectedNavPageIDs = ["intro-non-existent"]; // -> is done when setting the selectedNavPageIDs
@@ -529,14 +512,12 @@ class _KeplerAppState extends State<KeplerApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
 
-    /// iOS: beim Zurückholen aus dem Hintergrund die Widget-Daten auffrischen. Ohne das
-    /// aktualisieren sie sich nur beim Kaltstart der App oder beim Öffnen von "Dein Stundenplan" -
-    /// denn ob und wann die Hintergrundausführung läuft, entscheidet allein iOS. Online wird dabei
-    /// gedrosselt abgefragt (siehe updateIOSWidgetData). Während des Ladens übernimmt das _load(),
-    /// weil der Nutzertyp vorher nicht feststeht. Lehrer- oder Schülerplan wie beim Start (siehe
-    /// iosWidgetTeacherMode). Best-effort, wirft nie, blockiert nichts.
-    if (state == AppLifecycleState.resumed && Platform.isIOS && !_loading) {
-      updateIOSWidgetData(_stuPlanData, _credStore, _prefs, iosWidgetTeacherMode(_appState.userType, _stuPlanData));
+    /// beim Zurückholen aus dem Hintergrund die Widget-Daten auffrischen - sonst aktualisieren sie
+    /// sich nur beim Kaltstart der App oder beim Öffnen von "Dein Stundenplan". Online wird dabei
+    /// gedrosselt abgefragt (siehe updatePlanWidgets). Während des Ladens übernimmt das _load(),
+    /// weil der Nutzertyp vorher nicht feststeht. Best-effort, wirft nie, blockiert nichts.
+    if (state == AppLifecycleState.resumed && !_loading) {
+      updatePlanWidgets(_stuPlanData, _credStore, _prefs, widgetTeacherMode(_appState.userType, _stuPlanData));
     }
 
     if (state == AppLifecycleState.resumed && Platform.isAndroid) {

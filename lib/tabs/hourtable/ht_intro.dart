@@ -31,20 +31,18 @@
 // Sie sollten eine Kopie der GNU General Public License zusammen mit
 // kepler_app erhalten haben. Wenn nicht, siehe <https://www.gnu.org/licenses/>.
 
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:kepler_app/info_screen.dart';
 import 'package:kepler_app/introduction.dart';
 import 'package:kepler_app/libs/indiware.dart';
 import 'package:kepler_app/libs/lernsax.dart';
 import 'package:kepler_app/libs/logging.dart';
+import 'package:kepler_app/libs/plan_widgets.dart';
 import 'package:kepler_app/libs/preferences.dart';
 import 'package:kepler_app/libs/state.dart';
 import 'package:kepler_app/main.dart';
 import 'package:kepler_app/navigation.dart';
 import 'package:kepler_app/tabs/hourtable/ht_data.dart';
-import 'package:kepler_app/tabs/hourtable/widget_data.dart';
 import 'package:provider/provider.dart';
 
 /// Einführungsdisplays für Schüler bzw. Eltern
@@ -83,9 +81,8 @@ class ClassSelectScreen extends StatelessWidget {
           onSubmit: (selected) {
             if (teacherMode) {
               stdata.selectedTeacherName = selected;
-              /// iOS: Für Lehrer folgt keine Fächerauswahl, die die Widgets aktualisiert - also hier.
-              /// Android bleibt unverändert: Dort aktualisiert diese Stelle die Widgets nicht.
-              if (Platform.isIOS) updateIOSWidgetDataAfterSelectionChange(context);
+              /// für Lehrer folgt keine Fächerauswahl, die die Widgets aktualisiert - also hier
+              updatePlanWidgetsFrom(context, selectionChanged: true);
             } else {
               stdata.selectedClassName = selected;
             }
@@ -403,11 +400,7 @@ class SubjectSelectScreen extends StatelessWidget {
           },
           onFinish: (hidden) {
             stdata.hiddenCourseIDs = hidden;
-            if (Platform.isIOS) {
-              updateIOSWidgetDataAfterSelectionChange(context);
-            } else {
-              context.read<StuPlanData>().updateWidgets(context.read<AppState>().userType == UserType.teacher);
-            }
+            updatePlanWidgetsFrom(context, selectionChanged: true);
             infoScreenState.next();
           },
           availableSubjects: stdata.availableClassSubjects!,
@@ -721,11 +714,7 @@ class _AddNewStuPlanDialogState extends State<AddNewStuPlanDialog> {
                   stdata.setSelectedClassForAlt(widget.editId!, _newClass!);
                   stdata.setHiddenCoursesForAlt(widget.editId!, hidden);
                 }
-                if (Platform.isIOS) {
-                  updateIOSWidgetDataAfterSelectionChange(context);
-                } else {
-                  stdata.updateWidgets(context.read<AppState>().userType == UserType.teacher);
-                }
+                updatePlanWidgetsFrom(context, selectionChanged: true);
                 Navigator.pop(context, true);
               },
               onGoBack: () {

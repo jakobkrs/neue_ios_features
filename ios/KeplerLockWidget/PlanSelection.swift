@@ -6,7 +6,7 @@
 //
 // Widget-Konfiguration: erlaubt es, beim Bearbeiten eines Widgets auszuwählen, welcher der in der
 // App ausgewählten Pläne (Klasse bzw. Lehrer) angezeigt wird. Die Flutter-App schreibt bereits alle
-// Pläne in die App-Group (siehe lib/tabs/hourtable/widget_data.dart); hier werden sie nur als
+// Pläne in die App-Group (siehe lib/libs/plan_widgets.dart); hier werden sie nur als
 // auswählbare Einträge angeboten.
 
 import AppIntents

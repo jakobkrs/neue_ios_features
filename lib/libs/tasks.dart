@@ -43,11 +43,11 @@ import 'package:kepler_app/libs/filesystem.dart';
 import 'package:kepler_app/libs/indiware.dart';
 import 'package:kepler_app/libs/logging.dart';
 import 'package:kepler_app/libs/notifications.dart';
+import 'package:kepler_app/libs/plan_widgets.dart';
 import 'package:kepler_app/libs/preferences.dart';
 import 'package:kepler_app/libs/state.dart';
+import 'package:kepler_app/libs/watch_sync.dart';
 import 'package:kepler_app/tabs/hourtable/ht_data.dart';
-import 'package:kepler_app/tabs/hourtable/watch_sync.dart';
-import 'package:kepler_app/tabs/hourtable/widget_data.dart';
 import 'package:kepler_app/tabs/school/news_data.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:workmanager/workmanager.dart';
@@ -142,7 +142,7 @@ Future<void> runWidgetUpdateTask() async {
     creds.loadFromJson((await secureStorage.read(key: credStorePrefKey))!);
   }
   if (!creds.loaded || creds.vpUser == null || creds.vpPassword == null) return;
-  /// Ob überhaupt ein Plan ausgewählt ist (auch nur alternative Klassen), prüft saveStuPlanWidgetData
+  /// Ob überhaupt ein Plan ausgewählt ist (auch nur alternative Klassen), prüft savePlanWidgetData
   /// selbst - und leert bei fehlender Auswahl die alten Widget-Daten, wie im Vordergrund.
   if (!spdata.loaded) return;
 
@@ -153,11 +153,12 @@ Future<void> runWidgetUpdateTask() async {
   }
   /// forceRefresh: sonst würde der Plan-Cache genommen, sobald für den Tag schon eine Datei
   /// existiert, und neue Vertretungen kämen erst nach manuellem Neuladen in der App in den Widgets an.
-  /// Offline fällt saveStuPlanWidgetData auf den Cache zurück. Den Cache schreibt es nie - so
+  /// Offline fällt savePlanWidgetData auf den Cache zurück. Den Cache schreibt es nie - so
   /// erkennt runStuPlanFetchTask bei späteren Läufen weiterhin Änderungen gegenüber dem bisherigen
   /// Stand.
-  final ok = await saveStuPlanWidgetData(spdata, creds, prefs, spdata.selectedTeacherName != null, forceRefresh: true);
-  /// saveStuPlanWidgetData stößt die Übertragung an die Uhr nur entprellt (per Timer) an - bis der
+  /// ohne bekannten Nutzertyp: Lehrerplan, sobald ein Lehrer ausgewählt ist (siehe widgetTeacherMode)
+  final ok = await savePlanWidgetData(spdata, creds, prefs, widgetTeacherMode(UserType.nobody, spdata), forceRefresh: true);
+  /// savePlanWidgetData stößt die Übertragung an die Uhr nur entprellt (per Timer) an - bis der
   /// abläuft, ist dieser Task längst beendet und iOS hat die App wieder suspendiert. Deshalb hier
   /// sofort und abgewartet übertragen (bricht dabei den ausstehenden Timer ab).
   final watchOk = await syncWatchNow();

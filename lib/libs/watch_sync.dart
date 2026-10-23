@@ -49,7 +49,7 @@ Timer? _debounce;
 ///
 /// Entprellt, weil die Widget-Daten in kurzer Folge mehrfach geschrieben werden können (z.B. App-Start
 /// und kurz danach Öffnen von "Dein Stundenplan", oder eine geänderte Planauswahl, während noch eine
-/// Aktualisierung läuft - siehe updateIOSWidgetData in widget_data.dart). Ohne Entprellung ginge dann
+/// Aktualisierung läuft - siehe updatePlanWidgets in plan_widgets.dart). Ohne Entprellung ginge dann
 /// mehr als eine Übertragung raus - die Uhr hat dafür nur ein begrenztes Tagesbudget. Unveränderte
 /// Daten schickt die Bridge (WatchSyncBridge.swift) ohnehin nicht erneut.
 ///
